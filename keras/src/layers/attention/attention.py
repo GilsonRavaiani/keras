@@ -71,6 +71,8 @@ class Attention(Layer):
         **kwargs,
     ):
         super().__init__(**kwargs)
+        self.concat_score_weight = None
+        self.scale = None
         self.use_scale = use_scale
         self.score_mode = score_mode
         self.dropout = dropout
@@ -86,8 +88,7 @@ class Attention(Layer):
 
     def build(self, input_shape):
         self._validate_inputs(input_shape)
-        self.scale = None
-        self.concat_score_weight = None
+
         if self.use_scale:
             self.scale = self.add_weight(
                 name="scale",
@@ -96,6 +97,9 @@ class Attention(Layer):
                 dtype=self.dtype,
                 trainable=True,
             )
+        else:
+            self.scale = 1
+
         if self.score_mode == "concat":
             self.concat_score_weight = self.add_weight(
                 name="concat_score_weight",
@@ -104,6 +108,7 @@ class Attention(Layer):
                 dtype=self.dtype,
                 trainable=True,
             )
+
         self.built = True
 
     def _calculate_scores(self, query, key):
@@ -117,24 +122,20 @@ class Attention(Layer):
             Tensor of shape `(batch_size, Tq, Tv)`.
         """
         if self.score_mode == "dot":
-            scores = ops.matmul(query, ops.transpose(key, axes=[0, 2, 1]))
-            if self.scale is not None:
-                scores *= self.scale
-        elif self.score_mode == "concat":
+            scores = (
+                ops.matmul(query, ops.transpose(key, axes=[0, 2, 1]))
+                * self.scale
+            )
+        else:
             # Reshape tensors to enable broadcasting.
             # Reshape into [batch_size, Tq, 1, dim].
             q_reshaped = ops.expand_dims(query, axis=-2)
             # Reshape into [batch_size, 1, Tv, dim].
             k_reshaped = ops.expand_dims(key, axis=-3)
-            if self.scale is not None:
-                scores = self.concat_score_weight * ops.sum(
-                    ops.tanh(self.scale * (q_reshaped + k_reshaped)), axis=-1
-                )
-            else:
-                scores = self.concat_score_weight * ops.sum(
-                    ops.tanh(q_reshaped + k_reshaped), axis=-1
-                )
 
+            scores = self.concat_score_weight * ops.sum(
+                ops.tanh(self.scale * (q_reshaped + k_reshaped)), axis=-1
+            )
         return scores
 
     def _apply_scores(self, scores, value, scores_mask=None, training=False):
